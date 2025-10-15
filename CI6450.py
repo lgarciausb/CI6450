@@ -32,7 +32,7 @@ class Screen(object):
 
 
     def clearScreen(self):
-        self.sc.fill((255, 255, 255))
+        self.sc.fill((200, 200, 200))
 
     def display(self): self.pg.display.flip()
 
@@ -173,7 +173,7 @@ class Algos(object):
     def rotate(self,S,r):
         S.o += r
 
-    def seek(self, S, T, maxS = 0.25): 
+    def seek(self, S, T, maxS = 0.20): 
         delta =  T.d- S.d
         H = norm(delta)
         S.v = maxS*delta/H
@@ -215,7 +215,7 @@ class Algos(object):
         self.newOrientation(S, S.v)
         self.move(S)
 
-    def Darrive(self, S, T, minD = 25, slowD = 100, maxS = 0.25, maxA = 0.0005, ttt= 500):
+    def Darrive(self, S, T, minD = 25, slowD = 500, maxS = 0.55, maxA = 0.0005, ttt= 1000):
         delta =  T.d- S.d
         H = norm(delta)
         if H <= minD: 
@@ -280,7 +280,7 @@ class Algos(object):
         self.align(S, T2, minD, slowD, maxR, maxAlpha, ttt)
 
 
-    def pursue(self, S, T, maxPrediction = 500 , minD = 25, slowD = 100, maxS = 0.25, maxA = 0.0005, ttt= 500):
+    def pursue(self, S, T, maxPrediction = 1000 , minD = 25, slowD = 100, maxS = 0.20, maxA = 0.0005, ttt= 500):
         delta =  T.d- S.d
         H = norm(delta)
         s = norm(S.v)
@@ -292,7 +292,7 @@ class Algos(object):
         T2.d = T.d + T.v*prediction
         self.Darrive(S, T2, minD, slowD, maxS, maxA, ttt)
 
-    def evade(self, S, T, maxPrediction = 500 , minD = 25, slowD = 100, maxS = 0.25, maxA = 0.0005, ttt= 500):
+    def evade(self, S, T, maxPrediction = 1000 , minD = 25, slowD = 100, maxS = 0.20, maxA = 0.0005, ttt= 500):
         delta =  T.d- S.d
         H = norm(delta)
         s = norm(S.v)
@@ -310,19 +310,20 @@ class Algos(object):
         T2.o = atan2(-S.v[0], S.v[1])
         self.align(S, T2, minD, slowD, maxR, maxAlpha, ttt)
         
-    def Dwander(self, S, minD = pi/128, slowD = pi/32, maxR = 0.0005, maxAlpha = 0.0005, ttt= 500, Wrate = pi/128,Woffset = 75, Wradius = 25, maxA = 0.00005):
+    def Dwander(self, S, minD = pi/128, slowD = pi/32, maxR = 10, maxAlpha = 0.005, ttt= 500, Wrate = pi/24, Woffset = 75, maxA = 0.00005, maxS = 0.05):
         o = (random()-random()) * Wrate
         targetO = S.o + o
-        target = S.d + Woffset*np.array([cos(S.o), -sin(S.o)])
-        target += Wradius * np.array([cos(targetO), -sin(targetO)])
-        
-        S.a = maxA *np.array([cos(S.o), -sin(S.o)])
-        S.v = S.v +  S.a
-        self.move(S)
+        target = S.d + Woffset*np.array([-sin(targetO), cos(targetO)])
 
-        T2 = Circle()
-        T2.d = [0,0]
+        T2 = Circle(target, 10)
+        T2.d = target
         self.face(S, T2, minD, slowD, maxR, maxAlpha, ttt)
+
+        S.a = maxA *np.array([-sin(S.o), cos(S.o)])
+        S.v = S.v +  S.a
+        if abs(norm(S.v)) > maxS:
+            S.v = maxS*S.v/norm(S.v)
+        self.move(S)
 
 
     def pathFollow(self, S, P, minD = 50):
@@ -341,11 +342,11 @@ class Algos(object):
         T = P[S.target]
         self.seek(S, T)
 
-    def avoidWall(self, S, walls, rays, lookahead = 100, avoidDistance = 100):
+    def avoidWall(self, S, walls, debug, lookahead = 100, avoidDistance = 100):
         ray = []
         o = atan2(S.v[1], S.v[0])
         for i in range(11,1,-1):
-            #rays.append(Circle(S.d + np.array([lookahead*cos(o)/i,lookahead*sin(o)/i])))
+            #debug.append(Circle(S.d + np.array([lookahead*cos(o)/i,lookahead*sin(o)/i])))
             ray.append(S.d + np.array([lookahead*cos(o)/i,lookahead*sin(o)/i]))
         for w in walls:
             for p in ray:
@@ -355,19 +356,20 @@ class Algos(object):
                     return True
         return False
     
-    def wall_plus_Pursue(self, S, T, walls, rays):
-        if not self.avoidWall(S, walls, rays): self.pursue(S,T)
+    def wall_plus_Pursue(self, S, T, walls, debug):
+        if not self.avoidWall(S, walls, debug): self.pursue(S,T)
         
 
-    def wall_plus_Evade(self, S, T, walls, rays):
-        if not self.avoidWall(S, walls, rays): self.evade(S,T)
+    def wall_plus_Evade(self, S, T, walls, debug):
+        if not self.avoidWall(S, walls, debug): self.evade(S,T)
 
 class Geometry(object):
     mousepos = Circle(None,None,[0,0])
-    scenario = 0
+    scenario = -2
+    scText = ""
     A = Algos()
     def __init__(self):
-        self.rays = []
+        self.debug = []
         self.circle = [
         ]
         self.paths = [
@@ -391,7 +393,18 @@ class Geometry(object):
 
         i = self.scenario
         #seek player
-        if i == 0:
+        if i == 7:
+            self.scText = "Dwander"
+            for i in range(5):
+                self.circle.append(Circle(
+                    np.array([400,720/2]),
+                    25, 
+                    (54,200,100),
+                ))
+                self.A.assign(self.circle[-1], "Dwander")
+        #seek player
+        elif i == 0:
+            self.scText = "seek"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -409,6 +422,7 @@ class Geometry(object):
         
         #arrive
         elif i == 1:
+            self.scText = "arrive"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -426,6 +440,7 @@ class Geometry(object):
 
         #flee
         elif i == 2:
+            self.scText = "flee"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -443,6 +458,7 @@ class Geometry(object):
 
         #wander
         elif i == 3:
+            self.scText = "wander"
             for i in range(5):
                 self.circle.append(Circle(
                     np.array([400,720/2]),
@@ -452,7 +468,8 @@ class Geometry(object):
                 self.A.assign(self.circle[-1], "wander")
 
         #align
-        elif i == 4:
+        elif i == 8:
+            self.scText = "align"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -469,7 +486,8 @@ class Geometry(object):
             self.A.assign(self.circle[1], "align", self.circle[0])
 
         #vmatch
-        elif i == 5:
+        elif i == 9:
+            self.scText = "velocity match"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -486,7 +504,8 @@ class Geometry(object):
             self.A.assign(self.circle[1], "Vmatch", self.circle[0])
 
         #face
-        elif i == 6:
+        elif i == 10:
+            self.scText = "face"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -506,7 +525,8 @@ class Geometry(object):
             self.A.assign(self.circle[0], "arrive", self.mousepos)
 
         #pursue
-        elif i == 7:
+        elif i == 11:
+            self.scText = "pursue"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -523,7 +543,8 @@ class Geometry(object):
             self.A.assign(self.circle[1], "pursue", self.circle[0])
 
         #evade
-        elif i == 8:
+        elif i == 12:
+            self.scText = "evade"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -540,7 +561,8 @@ class Geometry(object):
             self.A.assign(self.circle[1], "evade", self.circle[0])
 
         #Dseek
-        elif i == 9:
+        elif i == 4:
+            self.scText = "dynamic seek"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -557,7 +579,8 @@ class Geometry(object):
             self.A.assign(self.circle[1], "Dseek", self.circle[0])
 
         #Darrive
-        elif i == 10:
+        elif i == 5:
+            self.scText = "dynamic arrive"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -574,7 +597,8 @@ class Geometry(object):
             self.A.assign(self.circle[1], "Darrive", self.circle[0])
 
         #Dflee
-        elif i == 11:
+        elif i == 6:
+            self.scText = "dynamic flee"
             self.circle = [
                 Circle(
                     np.array([800+50,720/2+50]),
@@ -591,18 +615,15 @@ class Geometry(object):
             self.A.assign(self.circle[1], "Dflee", self.circle[0])
 
         #followpath
-        elif i == 12:
-            self.paths = [
-                [
-                    Circle(np.array([100,100]), 5),
-                    Circle(np.array([750,80]), 5),
-                    Circle(np.array([1050,100]), 5),
-                    Circle(np.array([950,450]), 5),
-                    Circle(np.array([550,550]), 5),
-                    Circle(np.array([200,350]), 5),
-                    Circle(np.array([50,150]), 5)
-                ]    
-            ]
+        elif i == 13:
+            self.scText = "follow path"
+            path = []
+            for e in range(10):
+                path.append(Circle(
+                    np.array([850 + 200*cos(e*2*pi/10), 410 + 200*sin(e*2*pi/10)]),
+                    5
+                ))
+            self.paths.append(path)
             self.circle = [
                     Circle(np.array([800+50,720/2+50]),25, (90,115,255),),
                     Circle(np.array([30,30]),25, (90,115,255),),
@@ -614,7 +635,8 @@ class Geometry(object):
                 self.A.assign(c, "pathFollow", self.paths[0])
 
         #tom and jerry 
-        elif i == 13:
+        elif i == 14:
+            self.scText = "tom and jerry"
             self.circle = [
             Circle(
                 np.array([800+50,720/2+50]),
@@ -640,8 +662,8 @@ class Geometry(object):
                 Rect(np.array([700, 300]), 50, 200, (0,0,0),1)
             ]
 
-            self.A.assign(self.circle[0], "wall_plus_Pursue", self.circle[1], self.walls, self.rays)
-            self.A.assign(self.circle[1], "wall_plus_Evade", self.circle[0], self.walls, self.rays)
+            self.A.assign(self.circle[0], "wall_plus_Pursue", self.circle[1], self.walls, self.debug)
+            self.A.assign(self.circle[1], "wall_plus_Evade", self.circle[0], self.walls, self.debug)
 
     def drag(self, data):
         dx = data[0] - self.mousepos.d[0]
@@ -652,12 +674,12 @@ class Geometry(object):
         G.mousepos.d = data
 
     def tick(self):
-
+        self.debug.clear()
         for c in self.circle:
             self.A.runAlg(c)
 
 
-    def Geometries(self): return self.circle + sum(self.paths, []) + self.walls + self.rays
+    def Geometries(self): return self.circle + sum(self.paths, []) + self.walls + self.debug
 
 pygame.init()
 screen_width = 1500
@@ -665,7 +687,7 @@ screen_height = 720
 Sc = Screen(pygame, screen_width, screen_height)
 I = Input(pygame)
 G = Geometry()
-
+G.setScenario("w")
 running = True
 while running:
     for (eType, data) in I.getEvents():
@@ -698,6 +720,7 @@ while running:
 
     Sc.clearScreen()
     Sc.draw(G.Geometries())
+    Sc.write(G.scText,(140, 620))
     Sc.display()
     G.tick()
     
