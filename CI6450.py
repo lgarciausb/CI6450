@@ -195,7 +195,7 @@ class Algos(object):
         self.newOrientation(S, S.v)
         self.move(S)
 
-    def Dseek(self, S, T, maxA = 0.001, maxS = 10):
+    def Dseek(self, S, T, maxA = 0.007, maxS = 0.5):
         delta =  T.d- S.d
         H = norm(delta)
         a = maxA*delta/H
@@ -205,7 +205,7 @@ class Algos(object):
         self.newOrientation(S, S.v)
         self.move(S)
 
-    def Dflee(self, S, T, maxA = 0.00005, maxS = 0.20):
+    def Dflee(self, S, T, maxA = 0.005, maxS = 0.10):
         delta =  T.d- S.d
         H = norm(delta)
         a = maxA*delta/H
@@ -215,7 +215,7 @@ class Algos(object):
         self.newOrientation(S, S.v)
         self.move(S)
 
-    def Darrive(self, S, T, minD = 25, slowD = 500, maxS = 0.55, maxA = 0.0005, ttt= 1000):
+    def Darrive(self, S, T, minD = 100, slowD = 500, maxS = 0.55, maxA = 0.15, ttt= 1000):
         delta =  T.d- S.d
         H = norm(delta)
         if H <= minD: 
@@ -235,7 +235,7 @@ class Algos(object):
             self.lwyg(S)
         self.move(S)
 
-    def align(self, S, T, minD = pi/128, slowD = pi/32, maxR = 0.05, maxAlpha = 0.0005, ttt= 500):
+    def align(self, S, T, minD = pi/2, slowD = pi/32, maxR = 0.005, maxAlpha = 0.0005, ttt= 500):
         delta =  T.o- S.o
         delta = (delta + pi) % (2 * pi) - pi
         R = abs(delta)
@@ -266,13 +266,13 @@ class Algos(object):
         self.newOrientation(S, S.v)
         self.move(S)
     
-    def wander(self, S, maxS = 0.25, maxR = pi/24):
+    def wander(self, S, maxS = 0.05, maxR = pi/128):
         r = (random()-random()) * maxR
         self.rotate(S,r)
         S.v = np.array([-maxS*sin(S.o), maxS*cos(S.o)])
         self.move(S)
 
-    def face(self, S, T, minD = pi/128, slowD = pi/32, maxR = 0.01, maxAlpha = 0.000005, ttt= 500):
+    def face(self, S, T, minD = pi/128, slowD = pi/32, maxR = 0.01, maxAlpha = 0.005, ttt= 500):
 
         delta = S.d - T.d
         T2 = Circle([0,0])
@@ -292,7 +292,7 @@ class Algos(object):
         T2.d = T.d + T.v*prediction
         self.Darrive(S, T2, minD, slowD, maxS, maxA, ttt)
 
-    def evade(self, S, T, maxPrediction = 1000 , minD = 25, slowD = 100, maxS = 0.20, maxA = 0.0005, ttt= 500):
+    def evade(self, S, T, maxPrediction = 1000 , minD = 25, slowD = 100, maxS = 0.25, maxA = 0.0005, ttt= 500):
         delta =  T.d- S.d
         H = norm(delta)
         s = norm(S.v)
@@ -304,18 +304,20 @@ class Algos(object):
         T2.d = T.d + T.v*prediction
         self.Dflee(S, T2, maxA, maxS)
 
-    def lwyg(self, S, minD = pi/128, slowD = pi/32, maxR = 0.05, maxAlpha = 0.0005, ttt= 500):
+    def lwyg(self, S, minD = pi/128, slowD = pi/32, maxR = 0.5, maxAlpha = 0.05, ttt= 500):
         
         T2 = Circle()
         T2.o = atan2(-S.v[0], S.v[1])
         self.align(S, T2, minD, slowD, maxR, maxAlpha, ttt)
-        
-    def Dwander(self, S, minD = pi/128, slowD = pi/32, maxR = 10, maxAlpha = 0.005, ttt= 500, Wrate = pi/24, Woffset = 75, maxA = 0.00005, maxS = 0.05):
-        o = (random()-random()) * Wrate
-        targetO = S.o + o
+
+    improvO = 0 
+    def Dwander(self, S, debug, minD = pi/128, slowD = pi/32, maxR = 0.5, maxAlpha = 0.005, ttt= 500, Wrate = pi/8096, Woffset = 750, maxA = 0.00005, maxS = 0.05):
+        self.improvO += (random()-random()) * Wrate
+        targetO = S.o + self.improvO
         target = S.d + Woffset*np.array([-sin(targetO), cos(targetO)])
 
         T2 = Circle(target, 10)
+        debug.append(T2)
         T2.d = target
         self.face(S, T2, minD, slowD, maxR, maxAlpha, ttt)
 
@@ -352,7 +354,7 @@ class Algos(object):
             for p in ray:
                 if w.inside(p):
                     T = Circle(w.normal(p, avoidDistance))
-                    self.seek(S, T)
+                    self.Dseek(S, T)
                     return True
         return False
     
@@ -401,7 +403,7 @@ class Geometry(object):
                     25, 
                     (54,200,100),
                 ))
-                self.A.assign(self.circle[-1], "Dwander")
+                self.A.assign(self.circle[-1], "Dwander", self.debug)
         #seek player
         elif i == 0:
             self.scText = "seek"
@@ -624,6 +626,7 @@ class Geometry(object):
                     5
                 ))
             self.paths.append(path)
+            self.paths[0].reverse()
             self.circle = [
                     Circle(np.array([800+50,720/2+50]),25, (90,115,255),),
                     Circle(np.array([30,30]),25, (90,115,255),),
@@ -631,6 +634,7 @@ class Geometry(object):
                     Circle(np.array([20+50,680]),25, (90,115,255),),
                     Circle(np.array([500,360]),25, (90,115,255),)
             ]
+
             for c in self.circle:
                 self.A.assign(c, "pathFollow", self.paths[0])
 
@@ -665,6 +669,9 @@ class Geometry(object):
             self.A.assign(self.circle[0], "wall_plus_Pursue", self.circle[1], self.walls, self.debug)
             self.A.assign(self.circle[1], "wall_plus_Evade", self.circle[0], self.walls, self.debug)
 
+
+            
+
     def drag(self, data):
         dx = data[0] - self.mousepos.d[0]
         dy = data[1] - self.mousepos.d[1]
@@ -677,7 +684,6 @@ class Geometry(object):
         self.debug.clear()
         for c in self.circle:
             self.A.runAlg(c)
-
 
     def Geometries(self): return self.circle + sum(self.paths, []) + self.walls + self.debug
 
