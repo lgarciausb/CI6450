@@ -1,673 +1,27 @@
+from random import random
 import pygame
-from enum import Enum
-from math import sqrt, atan2, pi, cos, sin, inf
-import time
-import rustworkx as rx
+from math import inf
 import numpy as np
 from numpy.linalg import norm
-from random import random
+import matplotlib.path as mpath
 
+from IO import Screen, Input, gEvent
+from Geometries import Circle, Rect, Polygon, circle_rect_collision
+from Algos import Algos
+from Map import Map
+from StateMachine import StateMachine
 
-class Screen(object):
-    def __init__(self, pg:pygame, screen_width, screen_height):
-        self.pg = pg
-        self.sc = self.pg.display.set_mode((screen_width, screen_height), pygame.RESIZABLE)
-        self.pg.display.set_caption("CI6450")
-        self.font = pg.font.Font(size=32)
-
-    def draw(self, elements):
-        for el in elements:
-            if type(el) == Rect: 
-                self.drawRect(el)
-            elif type(el) == Circle: self.drawCircle(el)
-
-    def drawRect(self, rect):
-        self.pg.draw.rect(self.sc, rect.square_color, (rect.d[0], rect.d[1], rect.width, rect.height), rect.outline)
-
-    def drawCircle(self, circle):
-        self.pg.draw.circle(self.sc, circle.color, circle.d, circle.radius)
-        if circle.color == (0,0,0): return
-        H = circle.radius+20
-        self.pg.draw.line(self.sc, circle.color, circle.d, circle.d+[-H*sin(circle.o), H*cos(circle.o)], 5)
-
-
-    def clearScreen(self):
-        self.sc.fill((200, 200, 200))
-
-    def display(self): self.pg.display.flip()
-
-    def write(self, text, doko):
-        text_surface = self.font.render(text, True, (0, 0, 0))
-        text_rect = text_surface.get_rect()
-        text_rect.center = doko
-        self.sc.blit(text_surface, text_rect)
-
-class gEvent(Enum):
-        QUIT=0
-        LEFTCLICKUP = 1
-        MOUSEMOTION = 2
-        DRAG = 3
-        LEFTCLICKDOWN = 4
-        MOUSEWHEEL = 5
-        NUMBER = 6
-        CHAR = 7
-        RIGHTCLICKUP = 8
-        RIGHTCLICKDOWN = 9
-        DOUBLECLICK = 10
-
-class Input(object):
-
-    def __init__(self, pg):
-        self.pg = pg
-        self.drag = None
-        self.lastClick = 0
-        self.doubleClickTime = 0.150 #seconds
-
-    def getEvents(self): 
-        for event in self.pg.event.get():
-            if event.type == pygame.QUIT:
-                yield gEvent.QUIT, None
-            
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if self.drag != None:
-                    self.drag = None
-                    yield gEvent.LEFTCLICKUP, pygame.mouse.get_pos()
-
-            elif event.type == pygame.MOUSEMOTION:
-                if self.drag != None: yield gEvent.DRAG, [pygame.mouse.get_pos(), self.drag]
-                else: yield gEvent.MOUSEMOTION, pygame.mouse.get_pos()
-
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if self.lastClick+self.doubleClickTime > time.time():
-                    self.lastClick = 0
-                    yield gEvent.DOUBLECLICK, pygame.mouse.get_pos()
-                else:
-                    self.lastClick = time.time()
-                    self.drag = pygame.mouse.get_pos()
-                    yield gEvent.LEFTCLICKDOWN, pygame.mouse.get_pos()
-
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                yield gEvent.RIGHTCLICKDOWN, pygame.mouse.get_pos()
-            
-            elif event.type == pygame.MOUSEWHEEL:
-                yield gEvent.MOUSEWHEEL, event.y
-                
-            elif event.type == pygame.KEYDOWN:
-                if event.unicode.isdigit(): yield gEvent.NUMBER, int(event.unicode)
-                else: yield gEvent.CHAR, event.unicode
-
-
-class Rect(object):
-    def __init__(self,d,width, height, square_color, outline = 0):
-        self.d = d
-        self.square_color =  square_color
-        self.height = height
-        self.width = width
-        self.outline = outline
-
-    def topright(self): return (self.d[0]+self.width,self.d[1])
-    def bottomleft(self): return (self.d[0]+self.width,self.d[1]+self.height)
-    def bottomright(self): return (self.d[0]+self.width,self.d[1]+self.height)
-
-    def inside(self,mp):
-        return (self.height != 0 and self.width != 0
-                ) and (mp[0] >= self.d[0] and mp[1] >= self.d[1]
-                ) and (mp[0] <= self.d[0] + self.width and mp[1] >= self.d[1]
-                ) and (mp[0] >= self.d[0] and mp[1] <= self.d[1] + self.height
-                ) and (mp[0] <= self.d[0] + self.width and mp[1] <= self.d[1] + self.height)
-    
-    def normal(self, mp, ad):
-        Dleft = abs(mp[0] - self.d[0])
-        Dright = abs(mp[0] - self.d[0]-self.width)
-        Dup = abs(mp[1] - self.d[1])
-        Ddown = abs(mp[1] - self.d[1]-self.height)
-
-        if min(Dleft, Dright, Dup, Ddown) == Dleft:
-            return np.array([self.d[0]-ad, mp[1]])
-        elif min(Dleft, Dright, Dup, Ddown) == Dright:
-            return np.array([self.d[0] + self.width + ad, mp[1]])
-        if min(Dleft, Dright, Dup, Ddown) == Dup:
-            return np.array([mp[0], self.d[1]-ad])
-        else:
-            return np.array([mp[0], self.d[1] + self.height + ad])
-  
-
-class Circle(object):
-    def __init__(self, d=[0,0], radius=0, color=(0,0,0)):
-        self.radius = radius
-        self.color =  color
-        self.d = d
-        self.v = np.array([0,0])
-        self.a = np.array([0,0])
-        self.o = 0
-        self.r = 0
-        self.alpha = 0
-        self.target = None
-
-    def clicked(self, mp):
-        distance = sqrt((self.d[0]-mp[0])**2 + (self.d[1]-mp[1])**2)
-        return distance <= self.radius
-
-class Algos(object):
-
-    def __init__(self):
-        self.indexes = {}
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-    
-    def assign(self, S, i, *t):
-        self.indexes[S] = [i, t]
-
-    def runAlg(self,S):
-        i, t = self.indexes[S]
-        if t: self[i](S, *t)
-        else: self[i](S)
-
-    def newOrientation(self, S, v):
-        if v.any(): 
-            S.o = atan2(-v[0], v[1])
-
-    def move(self, S):
-        S.d = S.d + S.v
-    def rotate(self,S,r):
-        S.o += r
-
-    def seek(self, S, T, maxS = 0.20): 
-        delta =  T.d- S.d
-        H = norm(delta)
-        S.v = maxS*delta/H
-        self.newOrientation(S, S.v)
-        self.move(S)
-
-    def arrive(self, S, T, maxS = 0.25, ttt = 500, minD = 25): 
-        delta =  T.d- S.d
-        H = norm(delta)
-        if H <= minD: S.v = np.array([0,0]) 
-        else: S.v = min(maxS, H/ttt)*delta/H
-        self.newOrientation(S, S.v)
-        self.move(S)
-
-    def flee(self, S, T, maxS = 0.05, ttt = 500): 
-        delta =  T.d- S.d
-        H = norm(delta)
-        S.v = -min(maxS, H/ttt)*delta/H
-        self.newOrientation(S, S.v)
-        self.move(S)
-
-    def Dseek(self, S, T, maxA = 0.007, maxS = 0.5):
-        delta =  T.d- S.d
-        H = norm(delta)
-        a = maxA*delta/H
-        S.v = S.v + a
-        if abs(norm(S.v)) > maxS:
-            S.v = maxS*S.v/norm(S.v)
-        self.newOrientation(S, S.v)
-        self.move(S)
-
-    def Dflee(self, S, T, maxA = 0.005, maxS = 0.10):
-        delta =  T.d- S.d
-        H = norm(delta)
-        a = maxA*delta/H
-        S.v = S.v - a
-        if abs(norm(S.v)) > maxS:
-            S.v = maxS*S.v/norm(S.v)
-        self.newOrientation(S, S.v)
-        self.move(S)
-
-    def Darrive(self, S, T, minD = 100, slowD = 500, maxS = 0.55, maxA = 0.15, ttt= 1000):
-        delta =  T.d- S.d
-        H = norm(delta)
-        if H <= minD: 
-            S.v = np.array([0,0])
-        else:
-            if H < slowD: 
-                targetV = maxS * H / slowD 
-            else:
-                targetV = maxS
-            
-            v = targetV*delta/H
-
-            a = (v - S.v)/ttt
-            if norm(a) > maxA:
-                a = maxA*a/norm(a)
-            S.v = S.v + a
-            self.lwyg(S)
-        self.move(S)
-
-    def align(self, S, T, minD = pi/2, slowD = pi/32, maxR = 0.005, maxAlpha = 0.0005, ttt= 500):
-        delta =  T.o- S.o
-        delta = (delta + pi) % (2 * pi) - pi
-        R = abs(delta)
-        if R <= minD: 
-            S.r = 0
-        else:
-            if R < slowD: 
-                targetR = maxR * R / slowD 
-            else:
-                targetR = maxR
-            
-            r = targetR*delta/R
-
-            alpha = (r - S.r)/ttt
-            if norm(alpha) > maxAlpha:
-                alpha = maxAlpha*alpha/norm(alpha)
-            S.r = S.r + alpha
-        self.rotate(S,S.r)
-
-    def Vmatch(self, S, T, maxA = 0.0005, ttt= 500):
-
-        v = T.v
-
-        a = (v - S.v)/ttt
-        if norm(a) > maxA:
-            a = maxA*a/norm(a)
-        S.v = S.v + a
-        self.newOrientation(S, S.v)
-        self.move(S)
-    
-    def wander(self, S, maxS = 0.05, maxR = pi/128):
-        r = (random()-random()) * maxR
-        self.rotate(S,r)
-        S.v = np.array([-maxS*sin(S.o), maxS*cos(S.o)])
-        self.move(S)
-
-    def face(self, S, T, minD = pi/128, slowD = pi/32, maxR = 0.01, maxAlpha = 0.005, ttt= 500):
-
-        delta = S.d - T.d
-        T2 = Circle([0,0])
-        T2.o = atan2(delta[0], -delta[1])
-        self.align(S, T2, minD, slowD, maxR, maxAlpha, ttt)
-
-
-    def pursue(self, S, T, maxPrediction = 1000 , minD = 25, slowD = 100, maxS = 0.20, maxA = 0.0005, ttt= 500):
-        delta =  T.d- S.d
-        H = norm(delta)
-        s = norm(S.v)
-
-        if s <= H/maxPrediction: prediction = maxPrediction
-        else: prediction = H/s
-
-        T2 = Circle([0,0])
-        T2.d = T.d + T.v*prediction
-        self.Darrive(S, T2, minD, slowD, maxS, maxA, ttt)
-
-    def evade(self, S, T, maxPrediction = 1000 , minD = 25, slowD = 100, maxS = 0.25, maxA = 0.0005, ttt= 500):
-        delta =  T.d- S.d
-        H = norm(delta)
-        s = norm(S.v)
-
-        if s <= H/maxPrediction: prediction = maxPrediction
-        else: prediction = H/s
-
-        T2 = Circle()
-        T2.d = T.d + T.v*prediction
-        self.Dflee(S, T2, maxA, maxS)
-
-    def lwyg(self, S, minD = pi/128, slowD = pi/32, maxR = 0.5, maxAlpha = 0.05, ttt= 500):
-        
-        T2 = Circle()
-        T2.o = atan2(-S.v[0], S.v[1])
-        self.align(S, T2, minD, slowD, maxR, maxAlpha, ttt)
-
-    improvO = 0 
-    def Dwander(self, S, debug, minD = pi/128, slowD = pi/32, maxR = 0.5, maxAlpha = 0.005, ttt= 500, Wrate = pi/8096, Woffset = 750, maxA = 0.00005, maxS = 0.05):
-        self.improvO += (random()-random()) * Wrate
-        targetO = S.o + self.improvO
-        target = S.d + Woffset*np.array([-sin(targetO), cos(targetO)])
-
-        T2 = Circle(target, 10)
-        debug.append(T2)
-        T2.d = target
-        self.face(S, T2, minD, slowD, maxR, maxAlpha, ttt)
-
-        S.a = maxA *np.array([-sin(S.o), cos(S.o)])
-        S.v = S.v +  S.a
-        if abs(norm(S.v)) > maxS:
-            S.v = maxS*S.v/norm(S.v)
-        self.move(S)
-
-
-    def pathFollow(self, S, P, minD = 50):
-        if S.target == None:
-            newTarget = None
-            targetH = inf
-            for i in range(0, len(P)-1):
-                H = norm(P[i].d - S.d)
-                if H < targetH:
-                    targetH = H
-                    newTarget = i
-            S.target = newTarget
-        elif norm(P[S.target].d - S.d) < minD:
-
-            S.target = (S.target + 1) % len(P)
-        T = P[S.target]
-        self.seek(S, T)
-
-    def avoidWall(self, S, walls, debug, lookahead = 100, avoidDistance = 100):
-        ray = []
-        o = atan2(S.v[1], S.v[0])
-        for i in range(11,1,-1):
-            #debug.append(Circle(S.d + np.array([lookahead*cos(o)/i,lookahead*sin(o)/i])))
-            ray.append(S.d + np.array([lookahead*cos(o)/i,lookahead*sin(o)/i]))
-        for w in walls:
-            for p in ray:
-                if w.inside(p):
-                    T = Circle(w.normal(p, avoidDistance))
-                    self.Dseek(S, T)
-                    return True
-        return False
-    
-    def wall_plus_Pursue(self, S, T, walls, debug):
-        if not self.avoidWall(S, walls, debug): self.pursue(S,T)
-        
-
-    def wall_plus_Evade(self, S, T, walls, debug):
-        if not self.avoidWall(S, walls, debug): self.evade(S,T)
-
-class Geometry(object):
+class Game(object):
     mousepos = Circle(None,None,[0,0])
     scenario = -2
     scText = ""
+    selection = None
     A = Algos()
+    M = Map()
+    circle = []
+    SM = StateMachine(circle, M, A)
     def __init__(self):
         self.debug = []
-        self.circle = [
-        ]
-        self.paths = [
-
-        ]
-        self.walls = [
-
-        ]
-
-
-    def setScenario(self, data):
-        if data == "w": 
-            self.scenario +=1
-        elif data == "q": 
-            self.scenario -=1
-        else: return
-        self.circle.clear()
-        self.paths.clear()
-        self.walls.clear()
-        self.A.indexes.clear()
-
-        i = self.scenario
-        #seek player
-        if i == 7:
-            self.scText = "Dwander"
-            for i in range(5):
-                self.circle.append(Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (54,200,100),
-                ))
-                self.A.assign(self.circle[-1], "Dwander", self.debug)
-        #seek player
-        elif i == 0:
-            self.scText = "seek"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "seek", self.circle[0])
-        
-        #arrive
-        elif i == 1:
-            self.scText = "arrive"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "arrive", self.circle[0])
-
-        #flee
-        elif i == 2:
-            self.scText = "flee"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "flee", self.circle[0])
-
-        #wander
-        elif i == 3:
-            self.scText = "wander"
-            for i in range(5):
-                self.circle.append(Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (54,200,100),
-                ))
-                self.A.assign(self.circle[-1], "wander")
-
-        #align
-        elif i == 8:
-            self.scText = "align"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "align", self.circle[0])
-
-        #vmatch
-        elif i == 9:
-            self.scText = "velocity match"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "Vmatch", self.circle[0])
-
-        #face
-        elif i == 10:
-            self.scText = "face"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                )
-            ]
-            for e in range(10):
-                self.circle.append(Circle(
-                    np.array([850 + 200*cos(e*2*pi/10), 410 + 200*sin(e*2*pi/10)]),
-                    25,
-                    (255,0,0)
-                ))
-                self.A.assign(self.circle[-1], "face", self.circle[0])
-
-            
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-
-        #pursue
-        elif i == 11:
-            self.scText = "pursue"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "pursue", self.circle[0])
-
-        #evade
-        elif i == 12:
-            self.scText = "evade"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "evade", self.circle[0])
-
-        #Dseek
-        elif i == 4:
-            self.scText = "dynamic seek"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "Dseek", self.circle[0])
-
-        #Darrive
-        elif i == 5:
-            self.scText = "dynamic arrive"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "Darrive", self.circle[0])
-
-        #Dflee
-        elif i == 6:
-            self.scText = "dynamic flee"
-            self.circle = [
-                Circle(
-                    np.array([800+50,720/2+50]),
-                    25, 
-                    (0,0,255),
-                ),
-                Circle(
-                    np.array([400,720/2]),
-                    25, 
-                    (255,0,0),
-                )
-            ]
-            self.A.assign(self.circle[0], "arrive", self.mousepos)
-            self.A.assign(self.circle[1], "Dflee", self.circle[0])
-
-        #followpath
-        elif i == 13:
-            self.scText = "follow path"
-            path = []
-            for e in range(10):
-                path.append(Circle(
-                    np.array([850 + 200*cos(e*2*pi/10), 410 + 200*sin(e*2*pi/10)]),
-                    5
-                ))
-            self.paths.append(path)
-            self.paths[0].reverse()
-            self.circle = [
-                    Circle(np.array([800+50,720/2+50]),25, (90,115,255),),
-                    Circle(np.array([30,30]),25, (90,115,255),),
-                    Circle(np.array([1400,680]),25, (90,115,255),),
-                    Circle(np.array([20+50,680]),25, (90,115,255),),
-                    Circle(np.array([500,360]),25, (90,115,255),)
-            ]
-
-            for c in self.circle:
-                self.A.assign(c, "pathFollow", self.paths[0])
-
-        #tom and jerry 
-        elif i == 14:
-            self.scText = "tom and jerry"
-            self.circle = [
-            Circle(
-                np.array([800+50,720/2+50]),
-                25, 
-                (0,0,255),
-            ),
-            Circle(
-                np.array([400,720/2]),
-                25, 
-                (255,0,0),
-            )
-        ]
-            self.paths = [
-
-            ]
-            
-
-            self.walls = [
-                Rect(np.array([50, 50]), 1500, 50, (0,0,0),1),
-                Rect(np.array([50, 50]), 50, 720, (0,0,0),1),
-                Rect(np.array([50, 680]), 1500, 50, (0,0,0),1),
-                Rect(np.array([1450, 50]), 50, 720, (0,0,0),1),
-                Rect(np.array([700, 300]), 50, 200, (0,0,0),1)
-            ]
-
-            self.A.assign(self.circle[0], "wall_plus_Pursue", self.circle[1], self.walls, self.debug)
-            self.A.assign(self.circle[1], "wall_plus_Evade", self.circle[0], self.walls, self.debug)
 
 
             
@@ -677,23 +31,203 @@ class Geometry(object):
         dy = data[1] - self.mousepos.d[1]
 
         for c in self.Geometries():
-            c.d += [dx,dy]
+            if type(c) == Polygon:
+                c.points = [p + [dx,dy] for p in c.points]
+                c.mpath = mpath.Path(c.points)
+            elif type(c) == Circle or type(c) == Rect: c.d += [dx,dy]
+                            
         G.mousepos.d = data
 
     def tick(self):
         self.debug.clear()
         for c in self.circle:
-            self.A.runAlg(c)
+            c.food -=1
+            if not c.food: 
+                c.status[0] = "ded"
 
-    def Geometries(self): return self.circle + sum(self.paths, []) + self.walls + self.debug
+            pol = self.M.getLocation(c)
+            if pol and ((pol.type == "ocean" and random() > 0.996) or (pol.type == "snow" and not c.items["coat"] and random() > 0.999) or pol.type == "lava"): 
+                c.status[0] = "ded"
+
+            
+
+        self.circle[:] = [c for c in self.circle if c.status[0] != "ded"]
+
+        if self.M.change:
+            for c in self.circle:
+                c.status[1] = c.path_goal
+                c.status[0] = c.path2_goal
+        self.M.change = False
+
+        for c in self.circle:       
+            self.SM.runAlg(c)
+
+        for wall in self.M.walls:
+            for c in self.circle:
+                if circle_rect_collision(c, wall):
+                    c.d = c.d - c.v
+
+
+    def Geometries(self, showPP = True): 
+        circlepath = []
+        if type(self.selection) == Circle:
+            circlepath = [Circle(c.d.copy(), 6, (255,0,0)) for c in self.selection.path]
+            for i in range(len(self.selection.path)-1):
+                circlepath.append([circlepath[i].d, circlepath[i+1].d])
+
+        return self.M.Geometries(showPP) + self.circle + self.debug + circlepath
+
+
+
+    newPol = []
+
+    mode = "n"
+
+    def addPolygon(self, pos):
+        if self.mode not in ("q", "e"): return
+
+        if len(self.M.polygons) == 0 or self.mode == "q":
+            if len(self.newPol) < 3:
+                gotchu = 0
+                for p in self.M.polPoints:
+                    if p.clicked(pos):
+                        pos = p.d
+                        gotchu = 1
+                        break
+                if (gotchu or len(self.newPol) == 2 or len(self.M.polygons) == 1): 
+                    for p in self.newPol:
+                        if p[0] == pos[0] and p[1] == pos[1]: return
+                    self.newPol.append(pos.copy())
+        else:
+            if len(self.newPol) != 0:
+                self.newPol.clear()
+            first = None
+            distance = inf
+            for p in self.M.polPoints:
+                d = norm(p.d - pos)
+                if d < distance:
+                    first = p.d
+                    distance = d
+            second = None
+            distance = inf
+            for p in self.M.polPoints:
+                d = norm(p.d - pos)
+                if d < distance and p.d[0] != first[0] and p.d[1] != first[1]:
+                    second = p.d
+                    distance = d
+            self.newPol = [pos.copy(), first.copy(), second.copy()]
+                    
+        if len(self.newPol) == 3:
+            self.M.addPolygon(self.newPol.copy())
+            self.newPol.clear()
+            
+            
+    def addWall(self, corners):
+        if self.mode != "w": return
+        self.M.addWall(corners)
+
+    def addPeasant(self,pos):
+        C = Circle(np.array(pos), 25, (0,255,0), 1)
+        self.SM.assign(C, "peasant")
+        self.circle.append(C)
+
+    def addMiner(self,pos):
+        C = Circle(np.array(pos), 25, (255,0,0), 1)
+        self.SM.assign(C, "miner")
+        self.circle.append(C)
+
+    def addArtisan(self,pos):
+        C = Circle(np.array(pos), 25, (230,80,0), 1)
+        self.SM.assign(C, "artisan")
+        self.circle.append(C)
+
+    def addField(self,pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "field"
+        pol.productivity = 10
+        pol.fieldColor()
+        self.M.fields.append(pol)
+
+    def addIron(self,pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "iron"
+        pol.productivity = 10
+        pol.ironColor()
+        self.M.mines.append(pol)
+    
+    def changeProductivity(self, pos, val):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol or pol.type not in ("field", "iron"): return
+        pol.productivity += val
+        if pol.productivity > 45: pol.productivity = 45
+        if pol.productivity < 1: pol.productivity = 1
+        if pol.type == "field":pol.fieldColor()
+        else: pol.ironColor()
+
+    def addwater(self, pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "ocean"
+        pol.color = (80,80,200)
+        self.M.oceans.append(pol)
+
+    def addice(self, pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "snow"
+        pol.color = (255,255,255)
+        self.M.snow.append(pol)
+
+    def addBase(self, pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "base"
+        pol.color = (10,10,10)
+        self.M.bases.append(pol)
+
+    def addLava(self, pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "lava"
+        pol.color = (200,40,0)
+        self.M.lava.append(pol)
+
+    def addWorkshop(self, pos):
+        self.M.change = True
+        pol = self.M.getPolygon(pos)
+        if not pol: return
+        pol.type = "workshop"
+        pol.color = (255, 69, 0)
+        self.M.workshop.append(pol)
+
+    def select(self, pos):
+        for c in self.circle:
+            if c.clicked(pos): 
+                self.selection = c
+                return
+        for pol in self.M.polygons:
+            if pol.mpath.contains_point(pos):
+                self.selection = pol
+                return
+        self.selection = None
+
+
 
 pygame.init()
 screen_width = 1500
 screen_height = 720
 Sc = Screen(pygame, screen_width, screen_height)
 I = Input(pygame)
-G = Geometry()
-G.setScenario("w")
+G = Game()
 running = True
 while running:
     for (eType, data) in I.getEvents():
@@ -706,27 +240,88 @@ while running:
         elif eType == gEvent.DRAG:
             G.drag(data[0])
 
+        elif eType == gEvent.RDRAG:
+            pass
+
+        elif eType == gEvent.RIGHTDRAGUP:
+            G.addWall(data)
+
         elif eType == gEvent.LEFTCLICKDOWN:
             pass
 
         elif eType == gEvent.DOUBLECLICK:
-            pass
+            G.select(data)
 
         elif eType == gEvent.RIGHTCLICKDOWN:
-            pass
+            if G.mode == "p": G.addPeasant(data)
+            if G.mode == "m": G.addMiner(data)
+            if G.mode == "f": G.addField(data)
+            if G.mode == "a": G.addwater(data)
+            if G.mode == "i": G.addice(data)
+            if G.mode == "b": G.addBase(data)
+            if G.mode == "l": G.addLava(data)
+            if G.mode == "o": G.addIron(data)
+            if G.mode == "k": G.addWorkshop(data)
+            if G.mode == "c": G.addArtisan(data)
+            else: G.addPolygon(np.array(data))
 
         elif eType == gEvent.MOUSEWHEEL:
+            G.changeProductivity(*data)
             pass
 
         elif eType == gEvent.MOUSEMOTION:
             G.mousepos.d = data
 
         elif eType == gEvent.CHAR:
-            G.setScenario(data)
+            if data == "w":
+                G.mode = "w"
+                G.scText = "add wall"
+            elif data == "q":
+                G.mode = "q"
+                G.scText = "manual add polygon"
+            elif data == "e":
+                G.mode = "e"
+                G.scText = "smart add polygon"
+            elif data == "s":
+                G.M.save()
+            elif data == "r":
+                G.M.read()
+            elif data == "p":
+                G.mode = "p"
+                G.scText = "add peasant"
+            elif data == "f":
+                G.mode = "f"
+                G.scText = "add field"
+            elif data == "a":
+                G.mode = "a"
+                G.scText = "add ocean"
+            elif data == "i":
+                G.mode = "i"
+                G.scText = "add snow"
+            elif data == "b":
+                G.mode = "b"
+                G.scText = "add base"
+            elif data == "l":
+                G.mode = "l"
+                G.scText = "add lava"
+            elif data == "o":
+                G.mode = "o"
+                G.scText = "add iron"
+            elif data == "m":
+                G.mode = "m"
+                G.scText = "add miner"
+            elif data == "k":
+                G.mode = "k"
+                G.scText = "add workshop"
+            elif data == "c":
+                G.mode = "c"
+                G.scText = "add artisan"
+
 
     Sc.clearScreen()
-    Sc.draw(G.Geometries())
+    Sc.draw(G.Geometries(G.mode in ("q", "e", "w")))
     Sc.write(G.scText,(140, 620))
+    Sc.info(G.selection)
     Sc.display()
     G.tick()
     
